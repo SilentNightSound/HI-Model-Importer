@@ -465,6 +465,7 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
         
             #TODO: FIX THIS FOR ELFS
             # NameError: cannot access free variable 'txt' where it is not associated with a value in enclosing scope
+            txt = []
             txt=[name for name in texture_maps if "ps-t0" in name or "ps-t1" in name or "ps-t2" in name or "ps-t3" in name or "ps-t4" in name and 
                  current_id not in [name for name in txt]]
             for t in txt:
