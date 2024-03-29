@@ -1323,7 +1323,7 @@ def export_3dmigoto(operator, context, vb_path, ib_path, fmt_path):
     write_fmt_file(open(fmt_path, 'w'), vb, ib)
 
 
-def export_3dmigoto_genshin(operator, context, object_name, vb_path, ib_path, fmt_path, use_foldername, ignore_hidden, only_selected, no_ramps, delete_intermediate, credit, Outline_Properties):
+def export_3dmigoto_genshin(operator, context, object_name, vb_path, ib_path, fmt_path, use_foldername, ignore_hidden, only_selected, no_ramps, delete_intermediate, credit, Outline_Properties, hi3rd_part2_avatar):
     scene = bpy.context.scene
 
     # Quick sanity check
@@ -1693,10 +1693,10 @@ def export_3dmigoto_genshin(operator, context, object_name, vb_path, ib_path, fm
                 # Write format reference file
                 write_fmt_file(open(fmt_path, 'w'), vb, ib)
 
-    generate_mod_folder(os.path.dirname(vb_path), object_name, no_ramps, delete_intermediate, credit)
+    generate_mod_folder(os.path.dirname(vb_path), object_name, no_ramps, delete_intermediate, credit, hi3rd_part2_avatar)
 
 
-def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, credit):
+def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, credit, hi3rd_part2_avatar):
 
     parent_folder = os.path.join(path, "../")
 
@@ -1709,6 +1709,12 @@ def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, cre
     vb_res_ini = ""
     ib_res_ini = ""
     tex_res_ini = ""
+    if hi3rd_part2_avatar:
+        pos_stride = 44
+        pos_blend_stride = 76
+    else:
+        pos_stride = 40
+        pos_blend_stride = 72
 
     for component in char_hash:
 
@@ -1748,19 +1754,18 @@ def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, cre
                 if component["blend_vb"]:
                     print("Splitting VB by buffer type, merging body parts")
                     try:
-                        x, y, z = collect_vb(path, current_name, current_object, stride)
+                        x, y, z = collect_vb(path, current_name, current_object, stride, pos_stride, pos_blend_stride)
                     except:
                         raise Fatal(f"ERROR: Unable to find {current_name} {current_object} when exporting. Double check the object exists and is named correctly")
                     position += x
                     blend += y
                     texcoord += z
-                    position_stride = 40
 
                 # This is the path for components without blend data (simple weapons, objects, etc.)
                 # Simplest route since we do not need to split up the buffer into multiple components
                 else:
                     position += collect_vb_single(path, current_name, current_object, stride)
-                    position_stride = stride
+                    pos_stride = stride
 
                 if delete_intermediate:
                     os.remove(os.path.join(path, f"{current_name}{current_object}.vb"))
@@ -1783,10 +1788,10 @@ def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, cre
                 if delete_intermediate:
                     os.remove(os.path.join(path, f"{current_name}{current_object}.fmt"))
 
-                if len(position) % position_stride != 0:
+                if len(position) % pos_stride != 0:
                     print("ERROR: VB buffer length does not match stride")
 
-                offset = len(position) // position_stride
+                offset = len(position) // pos_stride
 
                 # Older versions can only manage diffuse and lightmaps
                 if "texture_hashes" in component:
@@ -1826,13 +1831,15 @@ def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, cre
                 if credit:
                     vb_override_ini += "$active = 1\n"
                 vb_override_ini += "\n"
-                vb_override_ini += f"[TextureOverride{current_name}Blend]\nhash = {component['blend_vb']}\nvb1 = Resource{current_name}Blend\nhandling = skip\ndraw = {len(position) // 40},0 \n\n"
+
+                vb_override_ini += f"[TextureOverride{current_name}Blend]\nhash = {component['blend_vb']}\nvb1 = Resource{current_name}Blend\nhandling = skip\ndraw = {len(position) // pos_stride},0 \n\n"
                 vb_override_ini += f"[TextureOverride{current_name}Texcoord]\nhash = {component['texcoord_vb']}\nvb1 = Resource{current_name}Texcoord\n\n"
                 vb_override_ini += f"[TextureOverride{current_name}VertexLimitRaise]\nhash = {component['draw_vb']}\n\n"
 
-                vb_res_ini += f"[Resource{current_name}Position]\ntype = Buffer\nstride = 40\nfilename = {current_name}Position.buf\n\n"
+                vb_res_ini += f"[Resource{current_name}Position]\ntype = Buffer\nstride = {pos_stride}\nfilename = {current_name}Position.buf\n\n"
                 vb_res_ini += f"[Resource{current_name}Blend]\ntype = Buffer\nstride = 32\nfilename = {current_name}Blend.buf\n\n"
-                vb_res_ini += f"[Resource{current_name}Texcoord]\ntype = Buffer\nstride = {stride - 72}\nfilename = {current_name}Texcoord.buf\n\n"
+                vb_res_ini += f"[Resource{current_name}Texcoord]\ntype = Buffer\nstride = {stride - pos_blend_stride}\nfilename = {current_name}Texcoord.buf\n\n"
+
             else:
                 with open(os.path.join(parent_folder, f"{character_name}Mod", f"{current_name}.buf"), "wb") as f:
                     f.write(position)
@@ -1898,8 +1905,8 @@ def generate_mod_folder(path, character_name, no_ramps, delete_intermediate, cre
     ini_data += f"; Overrides -------------------------\n\n" + vb_override_ini + ib_override_ini
     ini_data += f"; CommandList -----------------------\n\n" + command_ini
     ini_data += f"; Resources -------------------------\n\n" + vb_res_ini + ib_res_ini + tex_res_ini + other_res
-    ini_data += f"\n; .ini generated by GIMI (Genshin-Impact-Model-Importer)\n" \
-        f"; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord"
+    ini_data += f"\n; .ini generated by HIMI (Honkai-Impact-Model-Importer)\n" \
+        f"; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/HI-Model-Importer/issues or contact SilentNightSound#7430 on discord"
 
     with open(os.path.join(parent_folder, f"{character_name}Mod", f"{character_name}.ini"), "w") as f:
         print("Writing ini file")
@@ -1932,7 +1939,7 @@ def create_mod_folder(parent_folder, name):
     else:
         print(f"WARNING: Everything currently in the {name}Mod folder will be overwritten - make sure any important files are backed up. Press any button to continue")
 
-def collect_vb(folder, name, classification, stride): 
+def collect_vb(folder, name, classification, stride, pos_stride, pos_blend_stride): 
     position = bytearray()
     blend = bytearray()
     texcoord = bytearray()
@@ -1942,9 +1949,9 @@ def collect_vb(folder, name, classification, stride):
         i = 0
         while i < len(data):
             import binascii
-            position += data[i:i+40]
-            blend += data[i+40:i+72]
-            texcoord += data[i+72:i+stride]
+            position += data[i:i+pos_stride]
+            blend += data[i+pos_stride:i+pos_blend_stride]
+            texcoord += data[i+pos_blend_stride:i+stride]
             i += stride
     return position, blend, texcoord
 
@@ -2133,6 +2140,7 @@ class Import3DMigotoFrameAnalysis(bpy.types.Operator, ImportHelper, IOOBJOrienta
             import_3dmigoto(self, context, paths, **keywords)
         except Fatal as e:
             self.report({'ERROR'}, str(e))
+
         return {'FINISHED'}
 
 def import_3dmigoto_raw_buffers(operator, context, vb_fmt_path, ib_fmt_path, vb_path=None, ib_path=None, vgmap_path=None, **kwargs):
@@ -2206,6 +2214,7 @@ class Import3DMigotoRaw(bpy.types.Operator, ImportHelper, IOOBJOrientationHelper
                     bpy.ops.import_mesh.migoto_input_format('INVOKE_DEFAULT')
             except Fatal as e:
                 self.report({'ERROR'}, str(e))
+
         return {'FINISHED'}
 
 class Import3DMigotoReferenceInputFormat(bpy.types.Operator, ImportHelper):
@@ -2370,6 +2379,26 @@ class Export3DMigotoGenshin(bpy.types.Operator, ExportHelper):
         default=0.001,
         soft_min=0,
     )
+
+    auto_outlines: BoolProperty(
+        name="auto outlines",
+        description="onoff",
+        default=True,
+    )
+
+    outline_thickness : bpy.props.IntProperty(
+        name="Thickness:",
+        description="set thickness",
+        default=70,
+        min=0,
+        max=255,
+    )
+
+    hi3rd_part2_avatar : BoolProperty(
+        name="export for hi3 part2 avatar",
+        description="export hi3 part2 avatar",
+        default=False,
+    )
     
     def draw(self, context):
         layout = self.layout
@@ -2397,6 +2426,60 @@ class Export3DMigotoGenshin(bpy.types.Operator, ExportHelper):
             col.prop(self, 'angle_weighted')
             col.prop(self, 'calculate_all_faces')
 
+        col.prop(self, 'auto_outlines')
+        if self.auto_outlines:
+            col.prop(self, 'outline_thickness')
+        col.prop(self, 'hi3rd_part2_avatar')
+
+    def set_outlines(self, thickness, hi3rd_part2_avatar):
+        fileName = ""
+        fileOffset = 0
+
+        # 12 (pos) + 12(normal) + 4(color) + 16(tan)
+        # array index start 0 because 28 - 1 = 27
+        if hi3rd_part2_avatar:
+            fileName = "Position"
+            fileOffset = 27
+        else:
+            fileName = "Texcoord"
+            fileOffset = 3
+
+        targetBuffer = [x for x in os.listdir(".") if f"{fileName}.buf" in x]
+        if len(targetBuffer) == 0:
+            print(f"ERROR: unable to find {fileName} file. Ensure you are running this in the same folder as Char{fileName}.buf. Exiting")
+            return
+        if len(targetBuffer) > 1:
+            print(f"ERROR: more than one {fileName} file identified {targetBuffer}. Please remove files until only one remains, then run script again. Exiting")
+        targetBuffer = targetBuffer[0]
+
+        ini_file = [x for x in os.listdir(".") if ".ini" in x]
+        if len(ini_file) == 0:
+            print(f"ERROR: unable to find .ini file. Ensure you are running this in the same folder as Char.ini. Exiting")
+            return
+        if len(ini_file) > 1:
+            print(f"ERROR: more than one .ini file identified {ini_file}. Please remove files until only one remains, then run script again. Exiting")
+        ini_file = ini_file[0]
+
+        with open(ini_file, "r") as f:
+            stride = int(f.read().split(targetBuffer)[0].split("\n")[-2].split("=")[1].strip())
+
+        print(f"{fileName}: {targetBuffer}, Ini: {ini_file}, Stride: {stride}")
+
+        with open(targetBuffer, "rb+") as f:
+            print("Removing outlines")
+            data = bytearray(f.read())
+            i = 0
+            while i < len(data):
+                data[i+fileOffset] = thickness
+                i += stride
+
+            print("Writing results to new file")
+            f.seek(0)
+            f.write(data)
+            f.truncate()
+
+        print("All operations complete, exiting")
+
     def execute(self, context):
         try:
             vb_path = self.filepath
@@ -2406,9 +2489,13 @@ class Export3DMigotoGenshin(bpy.types.Operator, ExportHelper):
 
             # FIXME: ExportHelper will check for overwriting vb_path, but not ib_path
             Outline_Properties = (self.outline_optimization, self.toggle_rounding_outline, self.decimal_rounding_outline, self.angle_weighted, self.overlapping_faces, self.detect_edges, self.calculate_all_faces, self.nearest_edge_distance)
-            export_3dmigoto_genshin(self, context, object_name, vb_path, ib_path, fmt_path, self.use_foldername, self.ignore_hidden, self.only_selected, self.no_ramps, self.delete_intermediate, self.credit, Outline_Properties)
+            export_3dmigoto_genshin(self, context, object_name, vb_path, ib_path, fmt_path, self.use_foldername, self.ignore_hidden, self.only_selected, self.no_ramps, self.delete_intermediate, self.credit, Outline_Properties, self.hi3rd_part2_avatar)
         except Fatal as e:
             self.report({'ERROR'}, str(e))
+
+        if self.auto_outlines:
+            self.set_outlines(self.outline_thickness, self.hi3rd_part2_avatar)
+
         return {'FINISHED'}
 
 
