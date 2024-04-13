@@ -3,13 +3,15 @@
 # that the Blender 3Dmigoto plugin recognizes
 
 # Note: Works for most honkai characters, but may fail on certain ones like apo
-
+# 10905ed856e6b621 => hi3_part2
+# 653c63ba4a73ca8b => hi3_part1
 import os
 import sys
 import argparse
 import shutil
 import json
 import re
+from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="Collects and compiles model data from 3dmigoto frame dumps")
@@ -18,6 +20,7 @@ def main():
     parser.add_argument("-c", "--component_names", nargs="*", type=stripped_string, help="Custom names to use for the components. If not specified, defaults to numbers")
     parser.add_argument("-f", "--framedump", type=str, help="Name of framedump folder (if not specified, uses most recent)")
     parser.add_argument("-vs", type=str, default="653c63ba4a73ca8b", help="Root VS for character model")
+    parser.add_argument("--is_part2", action='store_true', help="Extract Part 2 characters.")
     parser.add_argument("--force", "--force_draw", nargs="+", help="Force parser to collect from certain draw ids")
     parser.add_argument("--force_object", help="Force parser to collect from certain root object")
     parser.add_argument("--remove_sanity", action='store_true', help="Turns off the sanity checks, useful for troubleshooting. Also how I'm feeling after debugging this all day")
@@ -35,7 +38,7 @@ def main():
         frame_dump_folder = args.framedump
     else:
         print("Looking for most recent frame dump folder")
-        frame_dump_folder = [x for x in os.listdir(".") if "FrameAnalysis" in x][-1]
+        frame_dump_folder = [x for x in os.listdir(".") if "FrameAnalysis-" in x][-1]
         print(f"Found! Folder: {frame_dump_folder}")
 
     # Was getting tired of accidentally deleting folder contents when making typos
@@ -45,6 +48,12 @@ def main():
     else:
         print(f"WARNING: Everything currently in the {character} folder will be overwritten - make sure any important files are backed up. Press any button to continue")
         input()
+
+    if args.is_part2:
+        args.vs = "10905ed856e6b621"
+    else:
+        args.vs = "653c63ba4a73ca8b"
+    print(f"Hi3rd part info : part{'2' if args.is_part2 else '1'} vs : {args.vs}")
 
     # First pass to give us the VB for the position and blend data
     # Now, instead of just collecting one object corresponding to the root vs we collect all of them and double check
@@ -60,6 +69,7 @@ def main():
     # Third pass to collect IBs, texcoord VB, and diffuse/light maps
     # At this point, we are assuming that the positional data is going to come from the pointlists - if that assumption
     #   is proven wrong later on in the script, we will use the position vbs collected here instead
+    # TODO : For some characters and elfs texture and model collection seem to be done in different vs. I think this needs to be fixed.
     model_data, position_vbs, texcoord_vbs = collect_model_data(frame_dump_folder, relevant_ids, args.force)
 
     # For constructing the .ini file
@@ -95,22 +105,31 @@ def main():
             # Some characters have one texcoord, others have two, varies from character to character
             # Order is COLOR (R8G8B8A8_UNORM), TEXCOORD (R32G32_FLOAT), *TEXCOORD1 (R32G32_FLOAT) if it exists
             # Sizes are 4, 8, *8 for a total of either 12 or 20
+
             print(f"\nCollecting texcoord data from {texcoord_vbs[i]}")
             texcoord_stride = get_stride(os.path.join(frame_dump_folder, texcoord_vbs[i]))
-            print("Detected Stride: "+texcoord_stride)
-            texcoord_filter = ["COLOR:", "TEXCOORD:"]
-            if texcoord_stride == "20":
-                print("forcing stride 12")
-                pass
-                #in honkai it seems like theres no texcoord1 yet there is a stride of 20 some times????
-                # texcoord_filter.append("TEXCOORD1:")
-                #TODO: verify these claims
+            #print(f"\check stride => {texcoord_stride}")
+            
+            # TODO : part 2 characters have COLOR in vb0
+            # some character/skins stride is 28 ex) Nibelungen
+            # The character/skins exist with a size of 20, where texcoord1 is 0 and texcoord0 matches the values.
+            if args.vs == "653c63ba4a73ca8b": 
+                texcoord_filter = ["COLOR:", "TEXCOORD:"]
+                if texcoord_stride == "20" or "28":
+                    texcoord_filter.append("TEXCOORD1:")
+            else:
+                texcoord_filter = ["TEXCOORD:"]
+                if texcoord_stride == "16":
+                    texcoord_filter.append("TEXCOORD1:")
+            
             texcoord_filter = tuple(texcoord_filter)
 
             texcoord, texcoord_format = collect_buffer_data(frame_dump_folder, texcoord_vbs[i], texcoord_filter)
+            
 
             # Attempt to find the pointlist corresponding to the texture coordinate by comparing sizes
             print("Attempting to find corresponding scene object")
+            
             point_vb_candidates = [x for x in point_vbs if point_vbs[x]["vertex_count"] == len(texcoord)]
 
             if args.has_blend and not point_vb_candidates:
@@ -158,9 +177,13 @@ def main():
             # Order is POSITION (R32G32B32_FLOAT), NORMAL (R32G32B32_FLOAT), TANGENT (R32G32B32A32_FLOAT)
             # Sizes are 12, 12, 16 for a total stride of 40
             # All other values ignored
+            # TODO : part 2 characters positional data in COLOR(R8G8B8A8_UNORM). 
+            # Sizes are 12, 12, 4, 16 for a total stride of 44
             print(f"Collecting positional data from {position_vb}")
-            position, position_format = collect_buffer_data(frame_dump_folder, position_vb, ("POSITION:", "NORMAL:", "TANGENT:"))
-
+            if args.vs == "653c63ba4a73ca8b": 
+                position, position_format = collect_buffer_data(frame_dump_folder, position_vb, ("POSITION:", "NORMAL:", "TANGENT:"))
+            else:
+                position, position_format = collect_buffer_data(frame_dump_folder, position_vb, ("POSITION:", "NORMAL:", "TANGENT:", "COLOR:"))
 
             # If we have to continue because of super force, need to equalize the files
             if args.remove_sanity:
@@ -202,8 +225,24 @@ def main():
 
             vb_merged = construct_combined_buffer(buffer_data, element_format)
 
+        # This dictionary for streamlining procedures based on whether it's a part2 character and the normal map check.
+        if args.is_part2:
+            texture_dict = {
+                # has_normalmap
+                True: ["Diffuse", "NormalMap", "LightMap"],
+                # not has_normalmap
+                False: ["Diffuse", "LightMap", "Shadow"],
+            }
+        else:
+            texture_dict = {
+                # has_normalmap
+                True: ["NormalMap", "LightMap", "Diffuse"],
+                # not has_normalmap
+                False: ["LightMap", "Diffuse", "Shadow"],
+            }
+
         # Now that we have all the buffer data, assemble and output the final results to the folder
-        output_results(frame_dump_folder, character, args.component_names, model_data, vb_merged, position_vb, i, texture_only, base_classification, args.has_normalmap)
+        output_results(frame_dump_folder, character, args.component_names, model_data, vb_merged, position_vb, i, texture_only, base_classification, args.has_normalmap, texture_dict)
 
         # And save the hash data to the dictionary
         print("\nAdding character hash info to hash file")
@@ -235,22 +274,11 @@ def main():
                 if texture_hash not in seen_hashes:
                     seen_hashes.add(texture_hash)
                     extension = ".dds"
-                    if j==0:
-                        if args.has_normalmap:
-                            texture_type = "NormalMap"
-                        else:
-                            texture_type = "LightMap"
-                    elif j==1:
-                        if args.has_normalmap:
-                            texture_type = "LightMap"
-                        else:
-                            texture_type = "Diffuse"
-                    elif j==2 and args.has_normalmap:
-                        texture_type = "Diffuse"
+                    if j < 3:
+                        texture_type = texture_dict[args.has_normalmap][j]
                     else:
                         extension, texture_type = identify_texture(frame_dump_folder, texture)
-                        if [x for x in texture_group if texture_type==x[0]]:
-                            print(texture_group, texture_type)
+                        if [x for x in texture_group if texture_type == x[0]]:
                             texture_type = f"t{j}"
                     texture_group.append([texture_type, extension, texture_hash])
             texture_hashes.append(texture_group)
@@ -286,7 +314,7 @@ def main():
 # These contain information about the model before it is posed, along with blend-related data
 # May not exist for certain objects, depending how they are bound to bones, and have seen cases where there is a
 #   size mismatch between these buffers and the later ones that are drawn to the screen
-# Every example I have seen so far uses VS hash 653c63ba4a73ca8b (even between games), but not sure if that is unique or not
+# Every example I have seen so far uses VS hash 653c63ba4a73ca8b or 10905ed856e6b621 (even between games), but not sure if that is unique or not
 def collect_pointlist_candidates(frame_dump_folder, root_vs_hash="653c63ba4a73ca8b"):
     print("Searching for VB corresponding with root VS")
     point_vbs = {}
@@ -379,7 +407,6 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
     model_data = []
     position_vbs = []
     texcoord_vbs = []
-    txt = []
 
     # A couple of characters have unique draw call formats, this forces a specific list of ids to be parsed
     # Also good for troubleshooting
@@ -443,27 +470,23 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
                 print("4D normals identified, buffer damaged. Skipping")
                 continue
 
+
             # Re-arranging texture collection to be earlier
             # I had previously assumed that all relevant ids would contain textures, but it turns out sometimes the
             #   lower id values do not for whatever reason
             # The original script only used the diffuse and lightmaps, but I have extended to now look for shadow
             #   ramps and metal maps as well
-            texture_maps = [name for name in current_id_files if "-ps-t" in name and 
-                            (os.path.splitext(name)[1] == ".dds" 
-                              or os.path.splitext(name)[1] == ".jpg"
-                             ) 
-                             #the wrong textures seem to be dumped sometimes, so we filter them out they are oddly tagged with !S! before hash
-                             and "!S!" not in name
-                            #  and os.path.getsize(os.path.join(frame_dump_folder, name)) > 10000
-                            ]
-            
+            # the wrong textures seem to be dumped sometimes, so we filter them out they are oddly tagged with !S! before hash
+            texture_maps = [name for name in current_id_files if "-ps-t" in name and (
+                        os.path.splitext(name)[1] == ".dds" or os.path.splitext(name)[1] == ".jpg") and "!S!" not in name]
+            #texture_maps.sort(key=lambda x: int(x.split("ps-t")[1].split("=")[0]))
             print(f"Found texture maps: {texture_maps}")
             if len(texture_maps) < 2:
                 print(f"WARNING: Unable to find diffuse and lightmaps for {current_id}")
                 continue
 
             model_group[first_index] = []
-        
+            txt = []
             #TODO: FIX THIS FOR ELFS
             # NameError: cannot access free variable 'txt' where it is not associated with a value in enclosing scope
             txt=[name for name in texture_maps if "ps-t0" in name or "ps-t1" in name or "ps-t2" in name or "ps-t3" in name or "ps-t4" in name and 
@@ -484,6 +507,7 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
                 #   basis and combined later if I ever find one
                 texcoord_vb_candidate = [name for name in current_id_files if
                                          "-vb1=" in name and os.path.splitext(name)[1] == ".txt"]
+
                 if len(texcoord_vb_candidate) == 1:
                     texcoord_vb_candidate = texcoord_vb_candidate[0]
 
@@ -504,6 +528,7 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
                 # Same assumption needs to be changed for position too
                 position_vb_candidate = [name for name in current_id_files if
                                          "-vb0=" in name and os.path.splitext(name)[1] == ".txt"][0]
+
                 with open(os.path.join(frame_dump_folder, position_vb_candidate), "r") as f:
                     position_count = int([x for x in f.readlines() if "vertex count:" in x][0].split(": ")[1])
                 if position_count > position_largest_count:
@@ -601,6 +626,7 @@ def parse_buffer_headers(headers, data, filters):
 
     return results
 
+
 # Sanity check to remove buffer files with 4D normals
 def has_4D_normals(path):
     with open(path, "r") as f:
@@ -613,7 +639,6 @@ def has_4D_normals(path):
                 else:
                     return False
     return False
-
 
 # Constructs the output file that will be loaded into 3dmigoto
 def construct_combined_buffer(buffer_data, element_format):
@@ -645,13 +670,15 @@ def construct_combined_buffer(buffer_data, element_format):
     return vb_merged[:-1]
 
 
-def output_results(frame_dump_folder, character, component_names, model_data, vb_merged, position_vb, current_part, texture_only, object_classifications, has_normalmap):
+def output_results(frame_dump_folder, character, component_names, model_data, vb_merged, position_vb, current_part, texture_only, object_classifications, has_normalmap, texture_dict):
     # Note that this is not the same as the the distinction between components that is seen with the .fbx files
     # Characters can be split up in weird ways in the buffers (e.g. Kokomi has her hands in the "head" object)
 
     print(model_data, current_part)
     sorted_indexes = sorted(model_data[current_part].keys())
     count = 0
+    dumpPath = Path(frame_dump_folder)
+    characterPath = Path(character)
     for index in sorted_indexes:
         # Actually pretty rare to see more than three objects drawn on a single buffer, though I have seen four a few times
         # Now generalized to work with N objects, just repeats the last object with 2,3,4 etc.
@@ -672,45 +699,38 @@ def output_results(frame_dump_folder, character, component_names, model_data, vb
 
         if not texture_only:
             position_vb_hash = position_vb.split("=")[1].split("-")[0]
-            with open(os.path.join(character, f"{name_prefix}-vb0={position_vb_hash}.txt"), "w") as f:
+            with open(characterPath / f"{name_prefix}-vb0={position_vb_hash}.txt", "w") as f:
                 f.write(vb_merged)
 
             ib_hash = model_data[current_part][index][0].split("=")[1].split("-")[0]
-            shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][0]),
-                            os.path.join(character, f"{name_prefix}-ib={ib_hash}.txt"))
+            shutil.copyfile(dumpPath / model_data[current_part][index][0],
+                            characterPath / f"{name_prefix}-ib={ib_hash}.txt")
 
-        if has_normalmap:
-            shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][1]),
-                            os.path.join(character, f"{name_prefix}NormalMap.dds"))
-        else:
-            shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][1]),
-                            os.path.join(character, f"{name_prefix}LightMap.dds"))
-        if len(model_data[current_part][index]) > 2:
-            if has_normalmap:
-                shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][2]),
-                                os.path.join(character, f"{name_prefix}LightMap.dds"))
+        
+        # TODO : I've attempted to simplify the redundant code.
+        # If there are background textures occupying slots 2 and 3 that are not used for actual characters, I'm not sure how to handle them.
+        for i in range(1, len(model_data[current_part][index])):
+            if i < 4:
+                texType = texture_dict[has_normalmap][i-1]
+                extension = ".dds"
+                if (dumpPath / model_data[current_part][index][i]).stat().st_size > 192:
+                    if i == 3:
+                        texture_hash = model_data[current_part][index][3].split("-vs=")[0].split("=")[-1]
+                        extension, texture_type = identify_texture(frame_dump_folder, model_data[current_part][index][3])
+                        if texType != texture_type: 
+                            texture_hash = "" 
+                        else:
+                            texType = texture_type
+                    shutil.copyfile(dumpPath / model_data[current_part][index][i],
+                        characterPath / f"{name_prefix}{texType}{extension}")
             else:
-                shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][2]),
-                                os.path.join(character, f"{name_prefix}Diffuse.dds"))
-        if len(model_data[current_part][index]) > 3:
-            if has_normalmap:
-                texture_hash = ""
-                texture_type = "Diffuse"
-                shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][3]),
-                                os.path.join(character, f"{name_prefix}Diffuse.dds"))
-            else:
-                texture_hash = model_data[current_part][index][3].split("-vs=")[0].split("=")[-1]
-                extension, texture_type = identify_texture(frame_dump_folder, model_data[current_part][index][3])
-                shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][3]),
-                                os.path.join(character, f"{name_prefix}{texture_type}{extension}"))
-        if len(model_data[current_part][index]) > 4:
-            texture_hash2 = model_data[current_part][index][4].split("-vs=")[0].split("=")[-1]
-            if texture_hash2 != texture_hash:
-                extension2, texture_type2 = identify_texture(frame_dump_folder, model_data[current_part][index][4])
-                if texture_type2 == texture_type:
-                    texture_type2 = "t3"
-                shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][4]),
-                                os.path.join(character, f"{name_prefix}{texture_type2}{extension2}"))
+                texture_hash2 = model_data[current_part][index][4].split("-vs=")[0].split("=")[-1]
+                if texture_hash2 != texture_hash:
+                    extension2, texture_type2 = identify_texture(frame_dump_folder, model_data[current_part][index][4])
+                    if texture_type2 == texture_type:
+                        texture_type2 = "t3"
+                    shutil.copyfile(dumpPath / model_data[current_part][index][4],
+                        characterPath / f"{name_prefix}{texture_type2}{extension2}")
         count += 1
 
 
